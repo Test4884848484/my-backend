@@ -13,74 +13,64 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// 🔧 ДЕБАГ: Выведем информацию о DATABASE_URL
-console.log('🔧 Анализ DATABASE_URL:');
-if (process.env.DATABASE_URL) {
-  const dbUrl = process.env.DATABASE_URL;
-  const maskedUrl = dbUrl.replace(/:[^:@]+@/, ':****@');
-  console.log('- DATABASE_URL:', maskedUrl);
-  
-  // Парсим URL для информации
-  try {
-    const url = new URL(dbUrl);
-    console.log('- Хост:', url.hostname);
-    console.log('- Порт:', url.port);
-    console.log('- База:', url.pathname.replace('/', ''));
-    console.log('- Пользователь:', url.username);
-  } catch (e) {
-    console.log('- Ошибка парсинга URL:', e.message);
+// Подключение к PostgreSQL
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
   }
-} else {
-  console.log('- DATABASE_URL: не установлен');
-}
+});
 
-// 🔧 ИСПОЛЬЗУЕМ ТОЛЬКО DATABASE_URL
-let pool;
-
-if (process.env.DATABASE_URL) {
+// 🔧 СОЗДАНИЕ ТАБЛИЦ ПРИ ЗАПУСКЕ
+async function createTables() {
   try {
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: {
-        rejectUnauthorized: false
-      }
-    });
-    console.log('✅ Пул подключения создан');
-  } catch (err) {
-    console.error('❌ Ошибка создания пула:', err.message);
-  }
-} else {
-  console.error('❌ DATABASE_URL не установлен!');
-}
+    console.log('🔧 Создаем таблицы в PostgreSQL...');
 
-// Проверка подключения к базе
-async function testConnection() {
-  if (!pool) {
-    console.error('❌ Пул не инициализирован');
-    return false;
-  }
+    // Таблица пользователей
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT UNIQUE NOT NULL,
+        username VARCHAR(255),
+        first_name VARCHAR(255),
+        last_name VARCHAR(255),
+        photo_url TEXT,
+        balance INTEGER DEFAULT 0,
+        referral_code VARCHAR(50) UNIQUE,
+        referred_by BIGINT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    console.log('✅ Таблица users создана');
 
-  try {
-    const client = await pool.connect();
-    console.log('✅ PostgreSQL подключена успешно!');
-    
-    // Покажем информацию о БД
-    const dbResult = await client.query('SELECT current_database(), version()');
-    console.log(`📊 База данных: ${dbResult.rows[0].current_database}`);
-    
-    client.release();
-    return true;
-  } catch (err) {
-    console.error('❌ Ошибка подключения к PostgreSQL:', err.message);
-    return false;
-  }
-}
+    // Таблица рефералов
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS referrals (
+        id SERIAL PRIMARY KEY,
+        referrer_id BIGINT NOT NULL,
+        referred_id BIGINT NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT NOW(),
+        FOREIGN KEY (referrer_id) REFERENCES users(user_id),
+        FOREIGN KEY (referred_id) REFERENCES users(user_id)
+      )
+    `);
+    console.log('✅ Таблица referrals создана');
 
-// Создание таблицы при запуске
-async function initDatabase() {
-  if (!pool) return false;
+    // Таблица транзакций
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS transactions (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        amount INTEGER NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        FOREIGN KEY (user_id) REFERENCES users(user_id)
+      )
+    `);
+    console.log('✅ Таблица transactions создана');
 
-  try {
+    // Старая таблица messages (если нужна)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS messages (
         id SERIAL PRIMARY KEY,
@@ -88,157 +78,251 @@ async function initDatabase() {
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
-    console.log('✅ Таблица messages готова');
-    
-    // Проверим данные
-    const result = await pool.query('SELECT COUNT(*) as count FROM messages');
-    const count = parseInt(result.rows[0].count);
-    console.log(`📊 В таблице ${count} сообщений`);
-    
-    // Добавим тестовое сообщение если таблица пустая
-    if (count === 0) {
-      await pool.query("INSERT INTO messages (text) VALUES ('🎉 Привет! База данных работает!')");
-      console.log('✅ Добавлено тестовое сообщение');
-    }
-    
-    return true;
+    console.log('✅ Таблица messages создана');
+
   } catch (err) {
-    console.error('❌ Ошибка инициализации базы:', err.message);
+    console.error('❌ Ошибка создания таблиц:', err);
+  }
+}
+
+// 🔧 ФУНКЦИЯ ДЛЯ ГЕНЕРАЦИИ РЕФЕРАЛЬНОГО КОДА
+function generateReferralCode() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < 8; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+// 🔧 ПОЛУЧИТЬ ИЛИ СОЗДАТЬ ПОЛЬЗОВАТЕЛЯ
+async function getOrCreateUser(userData) {
+  try {
+    const { user_id, username, first_name, last_name, photo_url } = userData;
+
+    // Проверяем существует ли пользователь
+    const userResult = await pool.query(
+      'SELECT * FROM users WHERE user_id = $1',
+      [user_id]
+    );
+
+    if (userResult.rows.length > 0) {
+      console.log('✅ Пользователь найден:', user_id);
+      return userResult.rows[0];
+    }
+
+    // Создаем нового пользователя
+    const referralCode = generateReferralCode();
+    const newUserResult = await pool.query(
+      `INSERT INTO users (user_id, username, first_name, last_name, photo_url, referral_code) 
+       VALUES ($1, $2, $3, $4, $5, $6) 
+       RETURNING *`,
+      [user_id, username, first_name, last_name, photo_url, referralCode]
+    );
+
+    console.log('✅ Новый пользователь создан:', user_id);
+    return newUserResult.rows[0];
+
+  } catch (err) {
+    console.error('❌ Ошибка в getOrCreateUser:', err);
+    throw err;
+  }
+}
+
+// 🔧 ОБРАБОТКА РЕФЕРАЛА
+async function processReferral(referredUserId, referralCode) {
+  try {
+    // Находим пользователя по реферальному коду
+    const referrerResult = await pool.query(
+      'SELECT user_id FROM users WHERE referral_code = $1',
+      [referralCode]
+    );
+
+    if (referrerResult.rows.length === 0) {
+      console.log('❌ Реферальный код не найден:', referralCode);
+      return false;
+    }
+
+    const referrerId = referrerResult.rows[0].user_id;
+
+    // Проверяем чтобы пользователь не мог быть своим же рефералом
+    if (referrerId === referredUserId) {
+      console.log('❌ Пользователь не может быть своим рефералом');
+      return false;
+    }
+
+    // Проверяем не был ли уже зарегистрирован этот реферал
+    const existingReferral = await pool.query(
+      'SELECT * FROM referrals WHERE referred_id = $1',
+      [referredUserId]
+    );
+
+    if (existingReferral.rows.length > 0) {
+      console.log('❌ Реферал уже зарегистрирован');
+      return false;
+    }
+
+    // Добавляем запись о реферале
+    await pool.query(
+      'INSERT INTO referrals (referrer_id, referred_id) VALUES ($1, $2)',
+      [referrerId, referredUserId]
+    );
+
+    // Начисляем бонус рефереру
+    await pool.query(
+      'UPDATE users SET balance = balance + 10 WHERE user_id = $1',
+      [referrerId]
+    );
+
+    // Записываем транзакцию
+    await pool.query(
+      `INSERT INTO transactions (user_id, amount, type, description) 
+       VALUES ($1, $2, $3, $4)`,
+      [referrerId, 10, 'referral', `Реферальный бонус от пользователя ${referredUserId}`]
+    );
+
+    console.log('✅ Реферал обработан:', referredUserId, '->', referrerId);
+    return true;
+
+  } catch (err) {
+    console.error('❌ Ошибка в processReferral:', err);
     return false;
   }
 }
 
-// Маршруты API
+// 📡 МАРШРУТЫ API
 
 // Главная страница API
 app.get('/', (req, res) => {
   res.json({ 
     message: '🚀 API работает!', 
-    database: process.env.DATABASE_URL ? 'PostgreSQL на Railway' : 'не настроена',
+    database: 'PostgreSQL на Railway',
     timestamp: new Date().toISOString(),
     endpoints: [
+      'GET /api/user/:userId',
+      'POST /api/user',
       'GET /api/messages',
-      'POST /api/messages', 
-      'DELETE /api/messages/:id',
-      'GET /health'
+      'POST /api/messages'
     ]
   });
 });
 
-// Получить все сообщения
-app.get('/api/messages', async (req, res) => {
-  if (!pool) {
-    return res.status(500).json({ 
-      error: 'Database not configured',
-      message: 'База данных не настроена'
-    });
+// 🔧 ПОЛУЧИТЬ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ
+app.get('/api/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    const userResult = await pool.query(`
+      SELECT u.*, COUNT(r.id) as referral_count
+      FROM users u
+      LEFT JOIN referrals r ON u.user_id = r.referrer_id
+      WHERE u.user_id = $1
+      GROUP BY u.id
+    `, [userId]);
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json(userResult.rows[0]);
+  } catch (err) {
+    console.error('❌ Ошибка получения пользователя:', err);
+    res.status(500).json({ error: 'Server error' });
   }
+});
 
+// 🔧 СОЗДАТЬ/ОБНОВИТЬ ПОЛЬЗОВАТЕЛЯ
+app.post('/api/user', async (req, res) => {
+  try {
+    const { user_id, username, first_name, last_name, photo_url, referral_code } = req.body;
+    
+    if (!user_id) {
+      return res.status(400).json({ error: 'user_id is required' });
+    }
+
+    // Создаем/обновляем пользователя
+    const user = await getOrCreateUser({
+      user_id, username, first_name, last_name, photo_url
+    });
+
+    // Обрабатываем реферала если есть код
+    if (referral_code) {
+      await processReferral(user_id, referral_code);
+    }
+
+    // Получаем обновленные данные пользователя
+    const userResult = await pool.query(`
+      SELECT u.*, COUNT(r.id) as referral_count
+      FROM users u
+      LEFT JOIN referrals r ON u.user_id = r.referrer_id
+      WHERE u.user_id = $1
+      GROUP BY u.id
+    `, [user_id]);
+
+    res.json(userResult.rows[0]);
+
+  } catch (err) {
+    console.error('❌ Ошибка создания пользователя:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ПОЛУЧИТЬ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ (для теста)
+app.get('/api/users', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT u.*, COUNT(r.id) as referral_count
+      FROM users u
+      LEFT JOIN referrals r ON u.user_id = r.referrer_id
+      GROUP BY u.id
+      ORDER BY u.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('❌ Ошибка получения пользователей:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 📝 СТАРЫЕ МАРШРУТЫ ДЛЯ СООБЩЕНИЙ
+app.get('/api/messages', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM messages ORDER BY created_at DESC');
     res.json(result.rows);
   } catch (err) {
-    console.error('❌ Ошибка получения сообщений:', err);
-    res.status(500).json({ error: 'Server error', details: err.message });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Добавить новое сообщение
 app.post('/api/messages', async (req, res) => {
-  if (!pool) {
-    return res.status(500).json({ 
-      error: 'Database not configured',
-      message: 'База данных не настроена'
-    });
-  }
-
   try {
     const { text } = req.body;
-    
-    if (!text || text.trim() === '') {
-      return res.status(400).json({ error: 'Text is required' });
-    }
+    if (!text) return res.status(400).json({ error: 'Text is required' });
 
     const result = await pool.query(
       'INSERT INTO messages (text) VALUES ($1) RETURNING *',
-      [text.trim()]
+      [text]
     );
-    
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('❌ Ошибка добавления сообщения:', err);
-    res.status(500).json({ error: 'Server error', details: err.message });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Удалить сообщение
-app.delete('/api/messages/:id', async (req, res) => {
-  if (!pool) {
-    return res.status(500).json({ 
-      error: 'Database not configured',
-      message: 'База данных не настроена'
-    });
-  }
-
-  try {
-    const { id } = req.params;
-    
-    const result = await pool.query('DELETE FROM messages WHERE id = $1 RETURNING *', [id]);
-    
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'Message not found' });
-    }
-    
-    res.json({ message: 'Message deleted', deleted: result.rows[0] });
-  } catch (err) {
-    console.error('❌ Ошибка удаления сообщения:', err);
-    res.status(500).json({ error: 'Server error', details: err.message });
-  }
-});
-
-// Проверка здоровья API
-app.get('/health', async (req, res) => {
-  if (!pool) {
-    return res.status(500).json({
-      status: 'error',
-      database: 'not configured',
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  try {
-    await pool.query('SELECT 1');
-    res.json({
-      status: 'ok',
-      database: 'connected',
-      timestamp: new Date().toISOString()
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'error',
-      database: 'disconnected',
-      error: err.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-// Запуск сервера
+// 🚀 ЗАПУСК СЕРВЕРА
 app.listen(port, async () => {
   console.log(`🚀 Сервер запущен на порту ${port}`);
+  console.log('🔧 Инициализация базы данных...');
   
-  if (process.env.DATABASE_URL) {
-    console.log('🔧 Инициализация базы данных...');
-    const dbConnected = await testConnection();
+  try {
+    await createTables();
+    console.log('✅ Все таблицы готовы!');
     
-    if (dbConnected) {
-      await initDatabase();
-      console.log('✅ Приложение готово к работе!');
-    } else {
-      console.log('⚠️ Приложение запущено, но база данных не подключена');
-    }
-  } else {
-    console.log('❌ DATABASE_URL не установлен!');
-    console.log('💡 Добавь базу данных в проект Railway или установи переменную DATABASE_URL');
+    // Проверяем подключение
+    const testResult = await pool.query('SELECT NOW() as time');
+    console.log('✅ Подключение к базе:', testResult.rows[0].time);
+    
+  } catch (err) {
+    console.error('❌ Ошибка инициализации:', err);
   }
 });
