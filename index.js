@@ -8,14 +8,25 @@ const port = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors({
-  origin: '*', // временно разрешим все домены
+  origin: '*',
   credentials: true
 }));
 app.use(express.json());
 
-// 🔧 ПОДКЛЮЧЕНИЕ К POSTGRESQL - используем только DATABASE_URL из переменных окружения
+// 🔧 ИСПОЛЬЗУЕМ ДРУГОЕ ИМЯ ПЕРЕМЕННОЙ чтобы избежать конфликта
+const databaseUrl = process.env.EXTERNAL_DATABASE_URL || process.env.DATABASE_URL;
+
+console.log('🔧 Проверяем переменные окружения:');
+console.log('- EXTERNAL_DATABASE_URL:', process.env.EXTERNAL_DATABASE_URL ? 'установлен' : 'не установлен');
+console.log('- DATABASE_URL:', process.env.DATABASE_URL ? 'установлен' : 'не установлен');
+
+if (!databaseUrl) {
+  console.error('❌ Ни одна переменная базы данных не установлена!');
+}
+
+// Подключение к PostgreSQL
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: databaseUrl,
   ssl: {
     rejectUnauthorized: false
   }
@@ -27,17 +38,15 @@ async function testConnection() {
     const client = await pool.connect();
     console.log('✅ PostgreSQL подключена успешно!');
     
-    // Покажем информацию о подключении (без пароля)
-    const dbInfo = process.env.DATABASE_URL ? 
-      process.env.DATABASE_URL.replace(/:[^:@]+@/, ':****@') : 
-      'not set';
-    console.log(`📊 Database: ${dbInfo}`);
+    // Покажем информацию о БД
+    const dbResult = await client.query('SELECT current_database(), version()');
+    console.log(`📊 База данных: ${dbResult.rows[0].current_database}`);
     
     client.release();
     return true;
   } catch (err) {
     console.error('❌ Ошибка подключения к PostgreSQL:', err.message);
-    console.log('💡 Проверь переменную DATABASE_URL в настройках Railway');
+    console.log('🔧 Используемый URL:', databaseUrl ? databaseUrl.replace(/:[^:@]+@/, ':****@') : 'не установлен');
     return false;
   }
 }
@@ -54,20 +63,15 @@ async function initDatabase() {
     `);
     console.log('✅ Таблица messages готова');
     
-    // Проверим подключение
+    // Проверим данные
     const result = await pool.query('SELECT COUNT(*) as count FROM messages');
     const count = parseInt(result.rows[0].count);
-    
     console.log(`📊 В таблице ${count} сообщений`);
     
-    // Добавим тестовое сообщение если таблица пустая
-    if (count === 0) {
-      await pool.query("INSERT INTO messages (text) VALUES ('Добро пожаловать! Первое сообщение из базы данных.')");
-      console.log('✅ Добавлено тестовое сообщение');
-    }
-    
+    return true;
   } catch (err) {
     console.error('❌ Ошибка инициализации базы:', err.message);
+    return false;
   }
 }
 
@@ -141,12 +145,11 @@ app.delete('/api/messages/:id', async (req, res) => {
 // Проверка здоровья API
 app.get('/health', async (req, res) => {
   try {
-    const dbResult = await pool.query('SELECT 1 as status');
+    await pool.query('SELECT 1');
     res.json({
       status: 'ok',
       database: 'connected',
-      timestamp: new Date().toISOString(),
-      check: dbResult.rows[0].status
+      timestamp: new Date().toISOString()
     });
   } catch (err) {
     res.status(500).json({
@@ -163,8 +166,12 @@ app.listen(port, async () => {
   console.log(`🚀 Сервер запущен на порту ${port}`);
   console.log('🔧 Инициализация базы данных...');
   
-  await testConnection();
-  await initDatabase();
+  const dbConnected = await testConnection();
   
-  console.log('✅ Приложение готово к работе!');
+  if (dbConnected) {
+    await initDatabase();
+    console.log('✅ Приложение готово к работе!');
+  } else {
+    console.log('⚠️ Приложение запущено, но база данных не подключена');
+  }
 });
