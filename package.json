@@ -1,7 +1,7 @@
 {
   "name": "my-backend",
   "version": "1.0.0",
-  "description": "Simple backend for GitHub Pages",
+  "description": "Backend for GitHub Pages app",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -11,5 +11,8 @@
     "cors": "^2.8.5",
     "pg": "^8.11.3",
     "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
