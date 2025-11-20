@@ -13,30 +13,47 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// 🔧 ИСПОЛЬЗУЕМ ПЕРЕМЕННЫЕ ОТ RAILWAY
-console.log('🔧 Проверяем переменные окружения:');
+// 🔧 ДЕБАГ: Выведем все переменные связанные с БД
+console.log('🔧 Все переменные PostgreSQL:');
+console.log('- DATABASE_URL:', process.env.DATABASE_URL ? process.env.DATABASE_URL.replace(/:[^:@]+@/, ':****@') : 'не установлен');
 console.log('- PGHOST:', process.env.PGHOST);
 console.log('- PGPORT:', process.env.PGPORT);
 console.log('- PGDATABASE:', process.env.PGDATABASE);
 console.log('- PGUSER:', process.env.PGUSER);
-console.log('- DATABASE_URL:', process.env.DATABASE_URL ? 'установлен' : 'не установлен');
+console.log('- PGPASSWORD:', process.env.PGPASSWORD ? '****' : 'не установлен');
 
-// Создаем строку подключения из отдельных переменных
-const connectionConfig = {
-  host: process.env.PGHOST,
-  port: process.env.PGPORT,
-  database: process.env.PGDATABASE,
-  user: process.env.PGUSER,
-  password: process.env.PGPASSWORD,
-  ssl: {
-    rejectUnauthorized: false
-  }
-};
+// 🔧 ВАРИАНТ 1: Попробуем использовать отдельные переменные сначала
+let connectionConfig;
 
-console.log('🔧 Конфигурация подключения:');
-console.log(`📡 Хост: ${connectionConfig.host}:${connectionConfig.port}`);
-console.log(`📊 База: ${connectionConfig.database}`);
-console.log(`👤 Пользователь: ${connectionConfig.user}`);
+if (process.env.PGHOST && process.env.PGPORT) {
+  // Используем отдельные переменные
+  console.log('🔧 Используем отдельные переменные PGHOST/PGPORT');
+  connectionConfig = {
+    host: process.env.PGHOST,
+    port: process.env.PGPORT,
+    database: process.env.PGDATABASE || 'railway',
+    user: process.env.PGUSER || 'postgres',
+    password: process.env.PGPASSWORD,
+    ssl: {
+      rejectUnauthorized: false
+    }
+  };
+} else if (process.env.DATABASE_URL) {
+  // Используем DATABASE_URL
+  console.log('🔧 Используем DATABASE_URL');
+  connectionConfig = {
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false
+    }
+  };
+} else {
+  console.error('❌ Нет переменных для подключения к базе!');
+}
+
+console.log('🔧 Финальная конфигурация:');
+console.log('- Хост:', connectionConfig?.host || connectionConfig?.connectionString?.split('@')[1]?.split(':')[0]);
+console.log('- Порт:', connectionConfig?.port || connectionConfig?.connectionString?.split(':').pop()?.split('/')[0]);
 
 // Подключение к PostgreSQL
 const pool = new Pool(connectionConfig);
@@ -55,7 +72,6 @@ async function testConnection() {
     return true;
   } catch (err) {
     console.error('❌ Ошибка подключения к PostgreSQL:', err.message);
-    console.log('🔧 Конфигурация:', connectionConfig);
     return false;
   }
 }
@@ -77,12 +93,6 @@ async function initDatabase() {
     const count = parseInt(result.rows[0].count);
     console.log(`📊 В таблице ${count} сообщений`);
     
-    // Добавим тестовое сообщение если таблица пустая
-    if (count === 0) {
-      await pool.query("INSERT INTO messages (text) VALUES ('🎉 Привет! База данных работает!')");
-      console.log('✅ Добавлено тестовое сообщение');
-    }
-    
     return true;
   } catch (err) {
     console.error('❌ Ошибка инициализации базы:', err.message);
@@ -90,35 +100,28 @@ async function initDatabase() {
   }
 }
 
-// Маршруты API
-
-// Главная страница API
+// 🔧 ПРОСТОЙ ТЕСТ БЕЗ БАЗЫ ДАННЫХ
 app.get('/', (req, res) => {
   res.json({ 
     message: '🚀 API работает!', 
-    database: 'PostgreSQL на Railway',
-    timestamp: new Date().toISOString(),
-    endpoints: [
-      'GET /api/messages',
-      'POST /api/messages', 
-      'DELETE /api/messages/:id',
-      'GET /health'
-    ]
+    status: 'База данных настраивается...',
+    timestamp: new Date().toISOString()
   });
 });
 
-// Получить все сообщения
 app.get('/api/messages', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM messages ORDER BY created_at DESC');
     res.json(result.rows);
   } catch (err) {
-    console.error('❌ Ошибка получения сообщений:', err);
-    res.status(500).json({ error: 'Server error', details: err.message });
+    res.status(500).json({ 
+      error: 'Database not available', 
+      message: 'База данных временно недоступна',
+      details: err.message 
+    });
   }
 });
 
-// Добавить новое сообщение
 app.post('/api/messages', async (req, res) => {
   try {
     const { text } = req.body;
@@ -134,30 +137,14 @@ app.post('/api/messages', async (req, res) => {
     
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('❌ Ошибка добавления сообщения:', err);
-    res.status(500).json({ error: 'Server error', details: err.message });
+    res.status(500).json({ 
+      error: 'Database not available', 
+      message: 'Не удалось сохранить сообщение',
+      details: err.message 
+    });
   }
 });
 
-// Удалить сообщение
-app.delete('/api/messages/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const result = await pool.query('DELETE FROM messages WHERE id = $1 RETURNING *', [id]);
-    
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'Message not found' });
-    }
-    
-    res.json({ message: 'Message deleted', deleted: result.rows[0] });
-  } catch (err) {
-    console.error('❌ Ошибка удаления сообщения:', err);
-    res.status(500).json({ error: 'Server error', details: err.message });
-  }
-});
-
-// Проверка здоровья API
 app.get('/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -188,5 +175,6 @@ app.listen(port, async () => {
     console.log('✅ Приложение готово к работе!');
   } else {
     console.log('⚠️ Приложение запущено, но база данных не подключена');
+    console.log('💡 Проверь что база данных привязана к проекту в Railway');
   }
 });
