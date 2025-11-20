@@ -13,24 +13,33 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// 🔧 ИСПОЛЬЗУЕМ ДРУГОЕ ИМЯ ПЕРЕМЕННОЙ чтобы избежать конфликта
-const databaseUrl = process.env.EXTERNAL_DATABASE_URL || process.env.DATABASE_URL;
-
+// 🔧 ИСПОЛЬЗУЕМ ПЕРЕМЕННЫЕ ОТ RAILWAY
 console.log('🔧 Проверяем переменные окружения:');
-console.log('- EXTERNAL_DATABASE_URL:', process.env.EXTERNAL_DATABASE_URL ? 'установлен' : 'не установлен');
+console.log('- PGHOST:', process.env.PGHOST);
+console.log('- PGPORT:', process.env.PGPORT);
+console.log('- PGDATABASE:', process.env.PGDATABASE);
+console.log('- PGUSER:', process.env.PGUSER);
 console.log('- DATABASE_URL:', process.env.DATABASE_URL ? 'установлен' : 'не установлен');
 
-if (!databaseUrl) {
-  console.error('❌ Ни одна переменная базы данных не установлена!');
-}
-
-// Подключение к PostgreSQL
-const pool = new Pool({
-  connectionString: databaseUrl,
+// Создаем строку подключения из отдельных переменных
+const connectionConfig = {
+  host: process.env.PGHOST,
+  port: process.env.PGPORT,
+  database: process.env.PGDATABASE,
+  user: process.env.PGUSER,
+  password: process.env.PGPASSWORD,
   ssl: {
     rejectUnauthorized: false
   }
-});
+};
+
+console.log('🔧 Конфигурация подключения:');
+console.log(`📡 Хост: ${connectionConfig.host}:${connectionConfig.port}`);
+console.log(`📊 База: ${connectionConfig.database}`);
+console.log(`👤 Пользователь: ${connectionConfig.user}`);
+
+// Подключение к PostgreSQL
+const pool = new Pool(connectionConfig);
 
 // Проверка подключения к базе
 async function testConnection() {
@@ -46,7 +55,7 @@ async function testConnection() {
     return true;
   } catch (err) {
     console.error('❌ Ошибка подключения к PostgreSQL:', err.message);
-    console.log('🔧 Используемый URL:', databaseUrl ? databaseUrl.replace(/:[^:@]+@/, ':****@') : 'не установлен');
+    console.log('🔧 Конфигурация:', connectionConfig);
     return false;
   }
 }
@@ -67,6 +76,12 @@ async function initDatabase() {
     const result = await pool.query('SELECT COUNT(*) as count FROM messages');
     const count = parseInt(result.rows[0].count);
     console.log(`📊 В таблице ${count} сообщений`);
+    
+    // Добавим тестовое сообщение если таблица пустая
+    if (count === 0) {
+      await pool.query("INSERT INTO messages (text) VALUES ('🎉 Привет! База данных работает!')");
+      console.log('✅ Добавлено тестовое сообщение');
+    }
     
     return true;
   } catch (err) {
