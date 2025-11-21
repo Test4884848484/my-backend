@@ -200,7 +200,7 @@ app.get('/', (req, res) => {
       'POST /api/user',
       'GET /api/users',
       'GET /api/messages',
-      'POST /api/messages'
+      'POST /api/messages',
       'PUT /api/user/:userId/balance',
       'PUT /api/user/:userId'
     ]
@@ -267,24 +267,6 @@ app.post('/api/user', async (req, res) => {
   }
 });
 
-// 🔧 ПОЛУЧИТЬ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ
-app.get('/api/users', async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT u.*, COUNT(r.id) as referral_count
-      FROM users u
-      LEFT JOIN referrals r ON u.user_id = r.referrer_id
-      GROUP BY u.id
-      ORDER BY u.balance DESC
-      LIMIT 100
-    `);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('❌ Ошибка получения пользователей:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
 // 🔧 ОБНОВИТЬ БАЛАНС ПОЛЬЗОВАТЕЛЯ
 app.put('/api/user/:userId/balance', async (req, res) => {
   try {
@@ -346,6 +328,23 @@ app.put('/api/user/:userId', async (req, res) => {
   }
 });
 
+// 🔧 ПОЛУЧИТЬ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ
+app.get('/api/users', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT u.*, COUNT(r.id) as referral_count
+      FROM users u
+      LEFT JOIN referrals r ON u.user_id = r.referrer_id
+      GROUP BY u.id
+      ORDER BY u.balance DESC
+      LIMIT 100
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('❌ Ошибка получения пользователей:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 // 📝 СТАРЫЕ МАРШРУТЫ ДЛЯ СООБЩЕНИЙ
 app.get('/api/messages', async (req, res) => {
@@ -411,9 +410,10 @@ app.listen(port, async () => {
     console.log('   GET  /api/users');
     console.log('   GET  /api/messages');
     console.log('   POST /api/messages');
+    console.log('   PUT  /api/user/:userId/balance');
+    console.log('   PUT  /api/user/:userId');
     
   } catch (err) {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
-
