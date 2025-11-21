@@ -201,6 +201,8 @@ app.get('/', (req, res) => {
       'GET /api/users',
       'GET /api/messages',
       'POST /api/messages'
+      'PUT /api/user/:userId/balance',
+      'PUT /api/user/:userId'
     ]
   });
 });
@@ -283,6 +285,68 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
+// 🔧 ОБНОВИТЬ БАЛАНС ПОЛЬЗОВАТЕЛЯ
+app.put('/api/user/:userId/balance', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { balance } = req.body;
+    
+    if (balance === undefined) {
+      return res.status(400).json({ error: 'Balance is required' });
+    }
+
+    const result = await pool.query(
+      'UPDATE users SET balance = $1 WHERE user_id = $2 RETURNING *',
+      [balance, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Записываем транзакцию
+    await pool.query(
+      `INSERT INTO transactions (user_id, amount, type, description) 
+       VALUES ($1, $2, $3, $4)`,
+      [userId, balance, 'game', 'Обновление баланса из игры']
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('❌ Ошибка обновления баланса:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ОБНОВИТЬ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ
+app.put('/api/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { username, first_name, last_name, photo_url } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE users 
+       SET username = COALESCE($1, username),
+           first_name = COALESCE($2, first_name),
+           last_name = COALESCE($3, last_name),
+           photo_url = COALESCE($4, photo_url)
+       WHERE user_id = $5 
+       RETURNING *`,
+      [username, first_name, last_name, photo_url, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('❌ Ошибка обновления пользователя:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+
 // 📝 СТАРЫЕ МАРШРУТЫ ДЛЯ СООБЩЕНИЙ
 app.get('/api/messages', async (req, res) => {
   try {
@@ -352,3 +416,4 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
+
