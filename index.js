@@ -21,6 +21,222 @@ const pool = new Pool({
   }
 });
 
+// 🔧 ОБНОВЛЕННАЯ СТРУКТУРА БАЗЫ ДАННЫХ
+async function createAdditionalTables() {
+    try {
+        // Таблица для данных пользователя с отдельными колонками для времени
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS user_data (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT UNIQUE NOT NULL,
+                balance INTEGER DEFAULT 0,
+                daily_bonus_count INTEGER DEFAULT 0,
+                daily_bonus_last_claim TIMESTAMP,
+                daily_bonus_current_reward INTEGER DEFAULT 10,
+                subscribe_completed INTEGER DEFAULT 0,
+                subscribe_last_claim DATE,
+                name_completed INTEGER DEFAULT 0,
+                name_last_claim DATE,
+                ref_desc_completed INTEGER DEFAULT 0,
+                ref_desc_last_claim DATE,
+                cases_opened INTEGER DEFAULT 0,
+                level INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        `);
+        
+        // Таблица инвентаря пользователя
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS user_inventory (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                item_name VARCHAR(255) NOT NULL,
+                item_price VARCHAR(50) NOT NULL,
+                item_image TEXT,
+                obtained_at TIMESTAMP DEFAULT NOW()
+            )
+        `);
+
+        console.log('✅ Обновленные таблицы созданы');
+    } catch (err) {
+        console.error('❌ Ошибка создания таблиц:', err);
+    }
+}
+
+// 🔧 ПОЛУЧИТЬ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ С ФОТО
+app.get('/api/user/full/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        // Получаем основные данные пользователя
+        const userResult = await pool.query(
+            'SELECT * FROM users WHERE user_id = $1',
+            [userId]
+        );
+        
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        const user = userResult.rows[0];
+        
+        // Получаем дополнительные данные
+        const dataResult = await pool.query(
+            'SELECT * FROM user_data WHERE user_id = $1',
+            [userId]
+        );
+        
+        let userData = {
+            balance: 0,
+            daily_bonus: {
+                count: 0,
+                last_claim: null,
+                current_reward: 10
+            },
+            quests: {
+                subscribe: { completed: 0, last_claim: null },
+                name: { completed: 0, last_claim: null },
+                ref_desc: { completed: 0, last_claim: null }
+            },
+            referrals: 0,
+            cases_opened: 0,
+            inventory: [],
+            level: 1
+        };
+        
+        if (dataResult.rows.length > 0) {
+            const data = dataResult.rows[0];
+            userData = {
+                balance: data.balance,
+                daily_bonus: {
+                    count: data.daily_bonus_count,
+                    last_claim: data.daily_bonus_last_claim,
+                    current_reward: data.daily_bonus_current_reward
+                },
+                quests: {
+                    subscribe: { 
+                        completed: data.subscribe_completed, 
+                        last_claim: data.subscribe_last_claim 
+                    },
+                    name: { 
+                        completed: data.name_completed, 
+                        last_claim: data.name_last_claim 
+                    },
+                    ref_desc: { 
+                        completed: data.ref_desc_completed, 
+                        last_claim: data.ref_desc_last_claim 
+                    }
+                },
+                referrals: user.referral_count || 0,
+                cases_opened: data.cases_opened,
+                level: data.level,
+                inventory: []
+            };
+        }
+        
+        // Получаем инвентарь
+        const inventoryResult = await pool.query(
+            'SELECT * FROM user_inventory WHERE user_id = $1 ORDER BY obtained_at DESC',
+            [userId]
+        );
+        
+        userData.inventory = inventoryResult.rows.map(item => ({
+            name: item.item_name,
+            price: item.item_price,
+            image: item.item_image
+        }));
+        
+        res.json({
+            user: user,
+            data: userData
+        });
+        
+    } catch (err) {
+        console.error('Error getting full user data:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// 🔧 СОХРАНИТЬ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ
+app.post('/api/user/data/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { 
+            balance,
+            daily_bonus,
+            quests,
+            cases_opened,
+            level 
+        } = req.body;
+        
+        const result = await pool.query(
+            `INSERT INTO user_data (
+                user_id, balance, daily_bonus_count, daily_bonus_last_claim, 
+                daily_bonus_current_reward, subscribe_completed, subscribe_last_claim,
+                name_completed, name_last_claim, ref_desc_completed, ref_desc_last_claim,
+                cases_opened, level
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (user_id) 
+            DO UPDATE SET 
+                balance = $2,
+                daily_bonus_count = $3,
+                daily_bonus_last_claim = $4,
+                daily_bonus_current_reward = $5,
+                subscribe_completed = $6,
+                subscribe_last_claim = $7,
+                name_completed = $8,
+                name_last_claim = $9,
+                ref_desc_completed = $10,
+                ref_desc_last_claim = $11,
+                cases_opened = $12,
+                level = $13,
+                updated_at = NOW()
+            RETURNING *`,
+            [
+                userId,
+                balance,
+                daily_bonus?.count || 0,
+                daily_bonus?.last_claim,
+                daily_bonus?.current_reward || 10,
+                quests?.subscribe?.completed || 0,
+                quests?.subscribe?.last_claim,
+                quests?.name?.completed || 0,
+                quests?.name?.last_claim,
+                quests?.ref_desc?.completed || 0,
+                quests?.ref_desc?.last_claim,
+                cases_opened || 0,
+                level || 1
+            ]
+        );
+        
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('Error saving user data:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// 🔧 ДОБАВИТЬ ПРЕДМЕТ В ИНВЕНТАРЬ
+app.post('/api/user/inventory/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { name, price, image } = req.body;
+        
+        const result = await pool.query(
+            `INSERT INTO user_inventory (user_id, item_name, item_price, item_image)
+             VALUES ($1, $2, $3, $4)
+             RETURNING *`,
+            [userId, name, price, image]
+        );
+        
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('Error adding to inventory:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 // 🔧 СОЗДАНИЕ ТАБЛИЦ ПРИ ЗАПУСКЕ
 async function createTables() {
   try {
@@ -513,4 +729,5 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
+
 
