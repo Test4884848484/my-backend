@@ -300,6 +300,102 @@ app.put('/api/user/:userId/balance', async (req, res) => {
   }
 });
 
+// 🔧 ПОЛУЧИТЬ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ (для админа)
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT u.*, COUNT(r.id) as referral_count
+      FROM users u
+      LEFT JOIN referrals r ON u.user_id = r.referrer_id
+      GROUP BY u.id
+      ORDER BY u.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('❌ Ошибка получения пользователей:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 УДАЛИТЬ ПОЛЬЗОВАТЕЛЯ (для админа)
+app.delete('/api/admin/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Удаляем связанные записи
+    await pool.query('DELETE FROM referrals WHERE referrer_id = $1 OR referred_id = $1', [userId]);
+    await pool.query('DELETE FROM transactions WHERE user_id = $1', [userId]);
+    
+    // Удаляем пользователя
+    const result = await pool.query('DELETE FROM users WHERE user_id = $1 RETURNING *', [userId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json({ message: 'User deleted', user: result.rows[0] });
+  } catch (err) {
+    console.error('❌ Ошибка удаления пользователя:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ОБНОВИТЬ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ (для админа)
+app.put('/api/admin/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { username, first_name, last_name, photo_url, balance } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE users 
+       SET username = COALESCE($1, username),
+           first_name = COALESCE($2, first_name),
+           last_name = COALESCE($3, last_name),
+           photo_url = COALESCE($4, photo_url),
+           balance = COALESCE($5, balance)
+       WHERE user_id = $6 
+       RETURNING *`,
+      [username, first_name, last_name, photo_url, balance, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('❌ Ошибка обновления пользователя:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ЭКСПОРТ БАЗЫ ДАННЫХ (для админа)
+app.get('/api/admin/export', async (req, res) => {
+  try {
+    // Получаем всех пользователей
+    const usersResult = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
+    const referralsResult = await pool.query('SELECT * FROM referrals ORDER BY created_at DESC');
+    const transactionsResult = await pool.query('SELECT * FROM transactions ORDER BY created_at DESC');
+    
+    const exportData = {
+      exported_at: new Date().toISOString(),
+      users: usersResult.rows,
+      referrals: referralsResult.rows,
+      transactions: transactionsResult.rows,
+      stats: {
+        total_users: usersResult.rows.length,
+        total_referrals: referralsResult.rows.length,
+        total_transactions: transactionsResult.rows.length
+      }
+    };
+    
+    res.json(exportData);
+  } catch (err) {
+    console.error('❌ Ошибка экспорта данных:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // 🔧 ОБНОВИТЬ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ
 app.put('/api/user/:userId', async (req, res) => {
   try {
@@ -417,3 +513,4 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
+
