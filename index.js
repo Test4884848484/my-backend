@@ -224,6 +224,104 @@ async function getOrCreateUser(userData) {
   }
 }
 
+// 🔧 TELEGRAM BOT API ИНТЕГРАЦИЯ
+const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN || "8308720989:AAHFS_9JXHB7T6UufDuQB9W-xjWTPU-x0lY";
+const TELEGRAM_CHANNEL = "@CS2DropZone";
+
+// 🔧 ПРОВЕРКА ПОДПИСКИ НА КАНАЛ ЧЕРЕЗ TELEGRAM BOT API
+app.post('/api/check-subscription/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Реальная проверка через Telegram Bot API
+    const isSubscribed = await checkTelegramSubscription(userId);
+    
+    res.json({ 
+      subscribed: isSubscribed,
+      channel: TELEGRAM_CHANNEL
+    });
+  } catch (err) {
+    console.error('Error checking subscription:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 РЕАЛЬНАЯ ПРОВЕРКА ПОДПИСКИ ЧЕРЕЗ TELEGRAM API
+async function checkTelegramSubscription(userId) {
+  try {
+    const response = await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${TELEGRAM_CHANNEL}&user_id=${userId}`
+    );
+    
+    const data = await response.json();
+    
+    if (data.ok && data.result) {
+      const status = data.result.status;
+      // Пользователь подписан если статус не 'left' и не 'kicked'
+      return status !== 'left' && status !== 'kicked';
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('Telegram API error:', error);
+    return false;
+  }
+}
+
+// 🔧 ПОЛУЧИТЬ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ ИЗ TELEGRAM
+app.post('/api/check-bio/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Получаем данные пользователя из базы
+    const userResult = await pool.query(
+      'SELECT last_name FROM users WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.json({ hasBotInBio: false });
+    }
+    
+    const user = userResult.rows[0];
+    const hasBotInBio = user.last_name && user.last_name.includes('@CS2DropZone_bot');
+    
+    res.json({ hasBotInBio: hasBotInBio });
+  } catch (err) {
+    console.error('Error checking bio:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ОБНОВИТЬ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ ИЗ TELEGRAM
+app.post('/api/update-user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { first_name, last_name, username, photo_url } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE users 
+       SET first_name = COALESCE($1, first_name),
+           last_name = COALESCE($2, last_name),
+           username = COALESCE($3, username),
+           photo_url = COALESCE($4, photo_url),
+           updated_at = NOW()
+       WHERE user_id = $5 
+       RETURNING *`,
+      [first_name, last_name, username, photo_url, userId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating user:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // 🔧 ОБРАБОТКА РЕФЕРАЛА
 async function processReferral(referredUserId, referralCode) {
   try {
@@ -982,4 +1080,5 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
+
 
