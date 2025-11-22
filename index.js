@@ -21,6 +21,10 @@ const pool = new Pool({
   }
 });
 
+// 🔧 TELEGRAM BOT API ИНТЕГРАЦИЯ
+const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN || "8308720989:AAHFS_9JXHB7T6UufDuQB9W-xjWTPU-x0lY";
+const TELEGRAM_CHANNEL = "@CS2DropZone";
+
 // 🔧 СОЗДАНИЕ ВСЕХ ТАБЛИЦ ПРИ ЗАПУСКЕ
 async function createTables() {
   try {
@@ -38,7 +42,8 @@ async function createTables() {
         balance INTEGER DEFAULT 0,
         referral_code VARCHAR(50) UNIQUE,
         referred_by BIGINT,
-        created_at TIMESTAMP DEFAULT NOW()
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
       )
     `);
     console.log('✅ Таблица users создана');
@@ -98,11 +103,12 @@ async function createAdditionalTables() {
         daily_bonus_last_claim TIMESTAMP,
         daily_bonus_current_reward INTEGER DEFAULT 10,
         subscribe_completed INTEGER DEFAULT 0,
-        subscribe_last_claim DATE,
+        subscribe_last_claim TIMESTAMP,
         name_completed INTEGER DEFAULT 0,
-        name_last_claim DATE,
+        name_last_claim TIMESTAMP,
         ref_desc_completed INTEGER DEFAULT 0,
-        ref_desc_last_claim DATE,
+        ref_desc_last_claim TIMESTAMP,
+        referral_last_claim TIMESTAMP,
         cases_opened INTEGER DEFAULT 0,
         level INTEGER DEFAULT 1,
         created_at TIMESTAMP DEFAULT NOW(),
@@ -131,6 +137,7 @@ async function createAdditionalTables() {
         name VARCHAR(255) NOT NULL,
         price INTEGER NOT NULL,
         image TEXT,
+        total_opened INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
@@ -224,104 +231,6 @@ async function getOrCreateUser(userData) {
   }
 }
 
-// 🔧 TELEGRAM BOT API ИНТЕГРАЦИЯ
-const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN || "8308720989:AAHFS_9JXHB7T6UufDuQB9W-xjWTPU-x0lY";
-const TELEGRAM_CHANNEL = "@CS2DropZone";
-
-// 🔧 ПРОВЕРКА ПОДПИСКИ НА КАНАЛ ЧЕРЕЗ TELEGRAM BOT API
-app.post('/api/check-subscription/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    
-    // Реальная проверка через Telegram Bot API
-    const isSubscribed = await checkTelegramSubscription(userId);
-    
-    res.json({ 
-      subscribed: isSubscribed,
-      channel: TELEGRAM_CHANNEL
-    });
-  } catch (err) {
-    console.error('Error checking subscription:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// 🔧 РЕАЛЬНАЯ ПРОВЕРКА ПОДПИСКИ ЧЕРЕЗ TELEGRAM API
-async function checkTelegramSubscription(userId) {
-  try {
-    const response = await fetch(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${TELEGRAM_CHANNEL}&user_id=${userId}`
-    );
-    
-    const data = await response.json();
-    
-    if (data.ok && data.result) {
-      const status = data.result.status;
-      // Пользователь подписан если статус не 'left' и не 'kicked'
-      return status !== 'left' && status !== 'kicked';
-    }
-    
-    return false;
-  } catch (error) {
-    console.error('Telegram API error:', error);
-    return false;
-  }
-}
-
-// 🔧 ПОЛУЧИТЬ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ ИЗ TELEGRAM
-app.post('/api/check-bio/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    
-    // Получаем данные пользователя из базы
-    const userResult = await pool.query(
-      'SELECT last_name FROM users WHERE user_id = $1',
-      [userId]
-    );
-    
-    if (userResult.rows.length === 0) {
-      return res.json({ hasBotInBio: false });
-    }
-    
-    const user = userResult.rows[0];
-    const hasBotInBio = user.last_name && user.last_name.includes('@CS2DropZone_bot');
-    
-    res.json({ hasBotInBio: hasBotInBio });
-  } catch (err) {
-    console.error('Error checking bio:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// 🔧 ОБНОВИТЬ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ ИЗ TELEGRAM
-app.post('/api/update-user/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { first_name, last_name, username, photo_url } = req.body;
-    
-    const result = await pool.query(
-      `UPDATE users 
-       SET first_name = COALESCE($1, first_name),
-           last_name = COALESCE($2, last_name),
-           username = COALESCE($3, username),
-           photo_url = COALESCE($4, photo_url),
-           updated_at = NOW()
-       WHERE user_id = $5 
-       RETURNING *`,
-      [first_name, last_name, username, photo_url, userId]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error('Error updating user:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
 // 🔧 ОБРАБОТКА РЕФЕРАЛА
 async function processReferral(referredUserId, referralCode) {
   try {
@@ -367,6 +276,14 @@ async function processReferral(referredUserId, referralCode) {
       [referrerId]
     );
 
+    // Обновляем счетчик рефералов в user_data
+    await pool.query(
+      `UPDATE user_data 
+       SET referrals = COALESCE(referrals, 0) + 1 
+       WHERE user_id = $1`,
+      [referrerId]
+    );
+
     // Записываем транзакцию
     await pool.query(
       `INSERT INTO transactions (user_id, amount, type, description) 
@@ -393,15 +310,18 @@ app.get('/', (req, res) => {
     timestamp: new Date().toISOString(),
     endpoints: [
       'GET /api/user/:userId',
+      'GET /api/user/full/:userId',
       'POST /api/user',
       'GET /api/users',
       'GET /api/messages',
       'POST /api/messages',
       'PUT /api/user/:userId/balance',
       'PUT /api/user/:userId',
-      'GET /api/user/full/:userId',
       'POST /api/user/data/:userId',
       'POST /api/user/inventory/:userId',
+      'POST /api/user/quest-cooldown/:userId',
+      'POST /api/check-subscription/:userId',
+      'POST /api/check-bio/:userId',
       'GET /api/cases',
       'GET /api/raffles'
     ]
@@ -467,7 +387,7 @@ app.get('/api/user/full/:userId', async (req, res) => {
         name: { completed: 0, last_claim: null },
         ref_desc: { completed: 0, last_claim: null }
       },
-      referrals: 0,
+      referrals: user.referral_count || 0,
       cases_opened: 0,
       inventory: [],
       level: 1
@@ -496,7 +416,8 @@ app.get('/api/user/full/:userId', async (req, res) => {
             last_claim: data.ref_desc_last_claim 
           }
         },
-        referrals: user.referral_count || 0,
+        referrals: data.referrals || user.referral_count || 0,
+        referral_last_claim: data.referral_last_claim,
         cases_opened: data.cases_opened || 0,
         level: data.level || 1,
         inventory: []
@@ -504,8 +425,8 @@ app.get('/api/user/full/:userId', async (req, res) => {
     } else {
       // Создаем запись в user_data если её нет
       await pool.query(
-        `INSERT INTO user_data (user_id, balance) VALUES ($1, $2)`,
-        [userId, user.balance || 0]
+        `INSERT INTO user_data (user_id, balance, referrals) VALUES ($1, $2, $3)`,
+        [userId, user.balance || 0, user.referral_count || 0]
       );
     }
     
@@ -536,21 +457,15 @@ app.get('/api/user/full/:userId', async (req, res) => {
 app.post('/api/user/data/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { 
-      balance,
-      daily_bonus,
-      quests,
-      cases_opened,
-      level 
-    } = req.body;
+    const userData = req.body;
     
     const result = await pool.query(
       `INSERT INTO user_data (
         user_id, balance, daily_bonus_count, daily_bonus_last_claim, 
         daily_bonus_current_reward, subscribe_completed, subscribe_last_claim,
         name_completed, name_last_claim, ref_desc_completed, ref_desc_last_claim,
-        cases_opened, level
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        referral_last_claim, cases_opened, level, referrals
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       ON CONFLICT (user_id) 
       DO UPDATE SET 
         balance = $2,
@@ -563,31 +478,35 @@ app.post('/api/user/data/:userId', async (req, res) => {
         name_last_claim = $9,
         ref_desc_completed = $10,
         ref_desc_last_claim = $11,
-        cases_opened = $12,
-        level = $13,
+        referral_last_claim = $12,
+        cases_opened = $13,
+        level = $14,
+        referrals = $15,
         updated_at = NOW()
       RETURNING *`,
       [
         userId,
-        balance,
-        daily_bonus?.count || 0,
-        daily_bonus?.last_claim,
-        daily_bonus?.current_reward || 10,
-        quests?.subscribe?.completed || 0,
-        quests?.subscribe?.last_claim,
-        quests?.name?.completed || 0,
-        quests?.name?.last_claim,
-        quests?.ref_desc?.completed || 0,
-        quests?.ref_desc?.last_claim,
-        cases_opened || 0,
-        level || 1
+        userData.balance || 0,
+        userData.daily_bonus?.count || 0,
+        userData.daily_bonus?.last_claim,
+        userData.daily_bonus?.current_reward || 10,
+        userData.quests?.subscribe?.completed || 0,
+        userData.quests?.subscribe?.last_claim,
+        userData.quests?.name?.completed || 0,
+        userData.quests?.name?.last_claim,
+        userData.quests?.ref_desc?.completed || 0,
+        userData.quests?.ref_desc?.last_claim,
+        userData.referral_last_claim,
+        userData.cases_opened || 0,
+        userData.level || 1,
+        userData.referrals || 0
       ]
     );
     
     // Также обновляем баланс в основной таблице users
     await pool.query(
       'UPDATE users SET balance = $1 WHERE user_id = $2',
-      [balance, userId]
+      [userData.balance || 0, userId]
     );
     
     res.json(result.rows[0]);
@@ -616,6 +535,108 @@ app.post('/api/user/inventory/:userId', async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+// 🔧 ОБНОВИТЬ ВРЕМЯ ПОСЛЕДНЕЙ НАГРАДЫ
+app.post('/api/user/quest-cooldown/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { questType } = req.body;
+    
+    const now = new Date().toISOString();
+    
+    // Обновляем время последней награды для конкретного квеста
+    let updateField = '';
+    switch(questType) {
+      case 'daily':
+        updateField = 'daily_bonus_last_claim';
+        break;
+      case 'subscribe':
+        updateField = 'subscribe_last_claim';
+        break;
+      case 'name':
+        updateField = 'name_last_claim';
+        break;
+      case 'ref_desc':
+        updateField = 'ref_desc_last_claim';
+        break;
+      case 'referral':
+        updateField = 'referral_last_claim';
+        break;
+    }
+    
+    if (updateField) {
+      await pool.query(
+        `UPDATE user_data SET ${updateField} = $1 WHERE user_id = $2`,
+        [now, userId]
+      );
+    }
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error updating quest cooldown:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ПРОВЕРКА ПОДПИСКИ НА КАНАЛ
+app.post('/api/check-subscription/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Эмуляция проверки подписки (заменить на реальный Telegram API вызов)
+    const isSubscribed = await checkTelegramSubscription(userId);
+    
+    res.json({ 
+      subscribed: isSubscribed,
+      channel: TELEGRAM_CHANNEL
+    });
+  } catch (err) {
+    console.error('Error checking subscription:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ПРОВЕРКА ИМЕНИ БОТА В ФАМИЛИИ
+app.post('/api/check-bio/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Получаем данные пользователя из базы
+    const userResult = await pool.query(
+      'SELECT last_name FROM users WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.json({ hasBotInBio: false });
+    }
+    
+    const user = userResult.rows[0];
+    const hasBotInBio = user.last_name && user.last_name.includes('@CS2DropZone_bot');
+    
+    res.json({ hasBotInBio: hasBotInBio });
+  } catch (err) {
+    console.error('Error checking bio:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ЭМУЛЯЦИЯ ПРОВЕРКИ ПОДПИСКИ (ЗАМЕНИТЬ НА РЕАЛЬНЫЙ TELEGRAM API)
+async function checkTelegramSubscription(userId) {
+  try {
+    // Реальная реализация:
+    // const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${TELEGRAM_CHANNEL}&user_id=${userId}`);
+    // const data = await response.json();
+    // return data.ok && data.result && data.result.status !== 'left';
+    
+    // Временная эмуляция
+    console.log(`🔍 Проверка подписки пользователя ${userId} на канал ${TELEGRAM_CHANNEL}`);
+    return Math.random() > 0.3; // 70% шанс что подписан
+  } catch (error) {
+    console.error('Telegram API error:', error);
+    return false;
+  }
+}
 
 // 🔧 ПОЛУЧИТЬ КЕЙСЫ
 app.get('/api/cases', async (req, res) => {
@@ -677,207 +698,6 @@ app.get('/api/raffles', async (req, res) => {
     res.json(testRaffles);
   } catch (err) {
     console.error('Error getting raffles:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// 🔧 ПРОВЕРКА ПОДПИСКИ НА КАНАЛ ЧЕРЕЗ TELEGRAM BOT API
-app.post('/api/check-subscription/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    
-    // Здесь должен быть реальный вызов Telegram Bot API для проверки подписки
-    // Временно используем эмуляцию
-    
-    // Эмуляция проверки подписки (в реальности нужно использовать Telegram Bot API)
-    const isSubscribed = await checkTelegramSubscription(userId);
-    
-    res.json({ subscribed: isSubscribed });
-  } catch (err) {
-    console.error('Error checking subscription:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// 🔧 ПРОВЕРКА ИМЕНИ БОТА В ФАМИЛИИ
-app.post('/api/check-bio/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    
-    // Получаем данные пользователя из базы
-    const userResult = await pool.query(
-      'SELECT last_name FROM users WHERE user_id = $1',
-      [userId]
-    );
-    
-    if (userResult.rows.length === 0) {
-      return res.json({ hasBotInBio: false });
-    }
-    
-    const user = userResult.rows[0];
-    const hasBotInBio = user.last_name && user.last_name.includes('@CS2DropZone_bot');
-    
-    res.json({ hasBotInBio: hasBotInBio });
-  } catch (err) {
-    console.error('Error checking bio:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// 🔧 ПРОВЕРКА РЕФЕРАЛЬНОЙ ССЫЛКИ В ОПИСАНИИ
-app.post('/api/check-ref-in-bio/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    
-    // Получаем данные пользователя
-    const userResult = await pool.query(
-      'SELECT * FROM users WHERE user_id = $1',
-      [userId]
-    );
-    
-    if (userResult.rows.length === 0) {
-      return res.json({ hasRefInBio: false });
-    }
-    
-    const user = userResult.rows[0];
-    const refLink = `https://t.me/CS2DropZone_bot?start=${user.referral_code}`;
-    
-    // Эмуляция проверки (в реальности нужно получать bio из Telegram API)
-    const hasRefInBio = await checkTelegramBio(userId, refLink);
-    
-    res.json({ hasRefInBio: hasRefInBio });
-  } catch (err) {
-    console.error('Error checking ref in bio:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// 🔧 ЭМУЛЯЦИЯ ПРОВЕРОК TELEGRAM (ЗАМЕНИТЬ НА РЕАЛЬНЫЕ ВЫЗОВЫ API)
-async function checkTelegramSubscription(userId) {
-  // Реальная реализация:
-  // const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getChatMember?chat_id=@CS2DropZone&user_id=${userId}`);
-  // const data = await response.json();
-  // return data.result && data.result.status !== 'left';
-  
-  // Временная эмуляция - 70% шанс что подписан
-  return Math.random() > 0.3;
-}
-
-async function checkTelegramBio(userId, refLink) {
-  // Реальная реализация:
-  // Нужно получать bio пользователя через Telegram API
-  // и проверять наличие реферальной ссылки
-  
-  // Временная эмуляция - 40% шанс что добавил ссылку
-  return Math.random() > 0.6;
-}
-
-// 🔧 ОБНОВИТЬ ВРЕМЯ ПОСЛЕДНЕЙ НАГРАДЫ
-app.post('/api/user/quest-cooldown/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { questType } = req.body;
-    
-    const now = new Date().toISOString();
-    
-    // Обновляем время последней награды для конкретного квеста
-    let updateField = '';
-    switch(questType) {
-      case 'daily':
-        updateField = 'daily_bonus_last_claim';
-        break;
-      case 'subscribe':
-        updateField = 'subscribe_last_claim';
-        break;
-      case 'name':
-        updateField = 'name_last_claim';
-        break;
-      case 'ref_desc':
-        updateField = 'ref_desc_last_claim';
-        break;
-      case 'referral':
-        updateField = 'referral_last_claim';
-        break;
-    }
-    
-    if (updateField) {
-      await pool.query(
-        `UPDATE user_data SET ${updateField} = $1 WHERE user_id = $2`,
-        [now, userId]
-      );
-    }
-    
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Error updating quest cooldown:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// 🔧 ОБНОВИТЬ СЧЕТЧИК НАГРАД
-app.post('/api/user/quest-reward/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { questType, reward } = req.body;
-    
-    // Получаем текущие данные
-    const dataResult = await pool.query(
-      'SELECT * FROM user_data WHERE user_id = $1',
-      [userId]
-    );
-    
-    if (dataResult.rows.length === 0) {
-      return res.status(404).json({ error: 'User data not found' });
-    }
-    
-    const userData = dataResult.rows[0];
-    let newBalance = userData.balance + reward;
-    
-    // Обновляем баланс и счетчики
-    let updateQuery = 'UPDATE user_data SET balance = $1';
-    let queryParams = [newBalance];
-    let paramIndex = 2;
-    
-    switch(questType) {
-      case 'daily':
-        updateQuery += `, daily_bonus_count = $${paramIndex}, daily_bonus_current_reward = $${paramIndex + 1}`;
-        queryParams.push((userData.daily_bonus_count || 0) + 1, (userData.daily_bonus_current_reward || 10) + 10);
-        paramIndex += 2;
-        break;
-      case 'subscribe':
-        updateQuery += `, subscribe_completed = $${paramIndex}`;
-        queryParams.push((userData.subscribe_completed || 0) + 1);
-        paramIndex += 1;
-        break;
-      case 'name':
-        updateQuery += `, name_completed = $${paramIndex}`;
-        queryParams.push((userData.name_completed || 0) + 1);
-        paramIndex += 1;
-        break;
-      case 'ref_desc':
-        updateQuery += `, ref_desc_completed = $${paramIndex}`;
-        queryParams.push((userData.ref_desc_completed || 0) + 1);
-        paramIndex += 1;
-        break;
-    }
-    
-    updateQuery += ` WHERE user_id = $${paramIndex}`;
-    queryParams.push(userId);
-    
-    await pool.query(updateQuery, queryParams);
-    
-    // Также обновляем баланс в основной таблице
-    await pool.query(
-      'UPDATE users SET balance = $1 WHERE user_id = $2',
-      [newBalance, userId]
-    );
-    
-    res.json({ 
-      success: true, 
-      newBalance: newBalance 
-    });
-  } catch (err) {
-    console.error('Error updating quest reward:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -969,7 +789,8 @@ app.put('/api/user/:userId', async (req, res) => {
        SET username = COALESCE($1, username),
            first_name = COALESCE($2, first_name),
            last_name = COALESCE($3, last_name),
-           photo_url = COALESCE($4, photo_url)
+           photo_url = COALESCE($4, photo_url),
+           updated_at = NOW()
        WHERE user_id = $5 
        RETURNING *`,
       [username, first_name, last_name, photo_url, userId]
@@ -1073,6 +894,9 @@ app.listen(port, async () => {
     console.log('   PUT  /api/user/:userId');
     console.log('   POST /api/user/data/:userId');
     console.log('   POST /api/user/inventory/:userId');
+    console.log('   POST /api/user/quest-cooldown/:userId');
+    console.log('   POST /api/check-subscription/:userId');
+    console.log('   POST /api/check-bio/:userId');
     console.log('   GET  /api/cases');
     console.log('   GET  /api/raffles');
     
@@ -1080,5 +904,3 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
-
-
