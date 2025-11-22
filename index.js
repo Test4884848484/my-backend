@@ -583,6 +583,207 @@ app.get('/api/raffles', async (req, res) => {
   }
 });
 
+// 🔧 ПРОВЕРКА ПОДПИСКИ НА КАНАЛ ЧЕРЕЗ TELEGRAM BOT API
+app.post('/api/check-subscription/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Здесь должен быть реальный вызов Telegram Bot API для проверки подписки
+    // Временно используем эмуляцию
+    
+    // Эмуляция проверки подписки (в реальности нужно использовать Telegram Bot API)
+    const isSubscribed = await checkTelegramSubscription(userId);
+    
+    res.json({ subscribed: isSubscribed });
+  } catch (err) {
+    console.error('Error checking subscription:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ПРОВЕРКА ИМЕНИ БОТА В ФАМИЛИИ
+app.post('/api/check-bio/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Получаем данные пользователя из базы
+    const userResult = await pool.query(
+      'SELECT last_name FROM users WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.json({ hasBotInBio: false });
+    }
+    
+    const user = userResult.rows[0];
+    const hasBotInBio = user.last_name && user.last_name.includes('@CS2DropZone_bot');
+    
+    res.json({ hasBotInBio: hasBotInBio });
+  } catch (err) {
+    console.error('Error checking bio:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ПРОВЕРКА РЕФЕРАЛЬНОЙ ССЫЛКИ В ОПИСАНИИ
+app.post('/api/check-ref-in-bio/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Получаем данные пользователя
+    const userResult = await pool.query(
+      'SELECT * FROM users WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.json({ hasRefInBio: false });
+    }
+    
+    const user = userResult.rows[0];
+    const refLink = `https://t.me/CS2DropZone_bot?start=${user.referral_code}`;
+    
+    // Эмуляция проверки (в реальности нужно получать bio из Telegram API)
+    const hasRefInBio = await checkTelegramBio(userId, refLink);
+    
+    res.json({ hasRefInBio: hasRefInBio });
+  } catch (err) {
+    console.error('Error checking ref in bio:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ЭМУЛЯЦИЯ ПРОВЕРОК TELEGRAM (ЗАМЕНИТЬ НА РЕАЛЬНЫЕ ВЫЗОВЫ API)
+async function checkTelegramSubscription(userId) {
+  // Реальная реализация:
+  // const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getChatMember?chat_id=@CS2DropZone&user_id=${userId}`);
+  // const data = await response.json();
+  // return data.result && data.result.status !== 'left';
+  
+  // Временная эмуляция - 70% шанс что подписан
+  return Math.random() > 0.3;
+}
+
+async function checkTelegramBio(userId, refLink) {
+  // Реальная реализация:
+  // Нужно получать bio пользователя через Telegram API
+  // и проверять наличие реферальной ссылки
+  
+  // Временная эмуляция - 40% шанс что добавил ссылку
+  return Math.random() > 0.6;
+}
+
+// 🔧 ОБНОВИТЬ ВРЕМЯ ПОСЛЕДНЕЙ НАГРАДЫ
+app.post('/api/user/quest-cooldown/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { questType } = req.body;
+    
+    const now = new Date().toISOString();
+    
+    // Обновляем время последней награды для конкретного квеста
+    let updateField = '';
+    switch(questType) {
+      case 'daily':
+        updateField = 'daily_bonus_last_claim';
+        break;
+      case 'subscribe':
+        updateField = 'subscribe_last_claim';
+        break;
+      case 'name':
+        updateField = 'name_last_claim';
+        break;
+      case 'ref_desc':
+        updateField = 'ref_desc_last_claim';
+        break;
+      case 'referral':
+        updateField = 'referral_last_claim';
+        break;
+    }
+    
+    if (updateField) {
+      await pool.query(
+        `UPDATE user_data SET ${updateField} = $1 WHERE user_id = $2`,
+        [now, userId]
+      );
+    }
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error updating quest cooldown:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ОБНОВИТЬ СЧЕТЧИК НАГРАД
+app.post('/api/user/quest-reward/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { questType, reward } = req.body;
+    
+    // Получаем текущие данные
+    const dataResult = await pool.query(
+      'SELECT * FROM user_data WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (dataResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User data not found' });
+    }
+    
+    const userData = dataResult.rows[0];
+    let newBalance = userData.balance + reward;
+    
+    // Обновляем баланс и счетчики
+    let updateQuery = 'UPDATE user_data SET balance = $1';
+    let queryParams = [newBalance];
+    let paramIndex = 2;
+    
+    switch(questType) {
+      case 'daily':
+        updateQuery += `, daily_bonus_count = $${paramIndex}, daily_bonus_current_reward = $${paramIndex + 1}`;
+        queryParams.push((userData.daily_bonus_count || 0) + 1, (userData.daily_bonus_current_reward || 10) + 10);
+        paramIndex += 2;
+        break;
+      case 'subscribe':
+        updateQuery += `, subscribe_completed = $${paramIndex}`;
+        queryParams.push((userData.subscribe_completed || 0) + 1);
+        paramIndex += 1;
+        break;
+      case 'name':
+        updateQuery += `, name_completed = $${paramIndex}`;
+        queryParams.push((userData.name_completed || 0) + 1);
+        paramIndex += 1;
+        break;
+      case 'ref_desc':
+        updateQuery += `, ref_desc_completed = $${paramIndex}`;
+        queryParams.push((userData.ref_desc_completed || 0) + 1);
+        paramIndex += 1;
+        break;
+    }
+    
+    updateQuery += ` WHERE user_id = $${paramIndex}`;
+    queryParams.push(userId);
+    
+    await pool.query(updateQuery, queryParams);
+    
+    // Также обновляем баланс в основной таблице
+    await pool.query(
+      'UPDATE users SET balance = $1 WHERE user_id = $2',
+      [newBalance, userId]
+    );
+    
+    res.json({ 
+      success: true, 
+      newBalance: newBalance 
+    });
+  } catch (err) {
+    console.error('Error updating quest reward:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // 🔧 СОЗДАТЬ/ОБНОВИТЬ ПОЛЬЗОВАТЕЛЯ
 app.post('/api/user', async (req, res) => {
   try {
@@ -781,3 +982,4 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
+
