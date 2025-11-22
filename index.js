@@ -90,7 +90,7 @@ async function createTables() {
   }
 }
 
-// 🔧 СОЗДАНИЕ ДОПОЛНИТЕЛЬНЫХ ТАБЛИЦ
+// В index.js в функции createAdditionalTables() добавляем недостающие колонки
 async function createAdditionalTables() {
   try {
     // Таблица для данных пользователя с отдельными колонками для времени
@@ -111,79 +111,46 @@ async function createAdditionalTables() {
         referral_last_claim TIMESTAMP,
         cases_opened INTEGER DEFAULT 0,
         level INTEGER DEFAULT 1,
+        referrals INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
       )
     `);
-    console.log('✅ Таблица user_data создана');
+    console.log('✅ Таблица user_data создана/обновлена');
     
-    // Таблица инвентаря пользователя
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_inventory (
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT NOT NULL,
-        item_name VARCHAR(255) NOT NULL,
-        item_price VARCHAR(50) NOT NULL,
-        item_image TEXT,
-        obtained_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    console.log('✅ Таблица user_inventory создана');
-
-    // Таблица кейсов
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS cases (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        price INTEGER NOT NULL,
-        image TEXT,
-        total_opened INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    console.log('✅ Таблица cases создана');
+    // 🔧 ДОБАВИМ ЭТУ ФУНКЦИЮ ДЛЯ ОБНОВЛЕНИЯ СТРУКТУРЫ
+    await updateTableStructure();
     
-    // Таблица предметов кейсов
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS case_items (
-        id SERIAL PRIMARY KEY,
-        case_id INTEGER REFERENCES cases(id),
-        name VARCHAR(255) NOT NULL,
-        price VARCHAR(50) NOT NULL,
-        image TEXT,
-        rarity VARCHAR(50) DEFAULT 'common'
-      )
-    `);
-    console.log('✅ Таблица case_items создана');
-    
-    // Таблица розыгрышей
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS raffles (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        description TEXT,
-        image TEXT,
-        end_date TIMESTAMP NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    console.log('✅ Таблица raffles создана');
-    
-    // Таблица участников розыгрышей
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS raffle_participants (
-        id SERIAL PRIMARY KEY,
-        raffle_id INTEGER REFERENCES raffles(id),
-        user_id BIGINT NOT NULL,
-        joined_at TIMESTAMP DEFAULT NOW(),
-        UNIQUE(raffle_id, user_id)
-      )
-    `);
-    console.log('✅ Таблица raffle_participants создана');
-
-    console.log('✅ Все дополнительные таблицы созданы');
   } catch (err) {
     console.error('❌ Ошибка создания дополнительных таблиц:', err);
+  }
+}
+
+// 🔧 ФУНКЦИЯ ДЛЯ ОБНОВЛЕНИЯ СТРУКТУРЫ ТАБЛИЦ
+async function updateTableStructure() {
+  try {
+    console.log('🔧 Проверяем и обновляем структуру таблиц...');
+    
+    // Добавляем недостающие колонки в user_data
+    const columnsToAdd = [
+      { name: 'referral_last_claim', type: 'TIMESTAMP' },
+      { name: 'referrals', type: 'INTEGER DEFAULT 0' }
+    ];
+    
+    for (const column of columnsToAdd) {
+      try {
+        await pool.query(`
+          ALTER TABLE user_data 
+          ADD COLUMN IF NOT EXISTS ${column.name} ${column.type}
+        `);
+        console.log(`✅ Колонка ${column.name} добавлена`);
+      } catch (err) {
+        console.log(`ℹ️ Колонка ${column.name} уже существует`);
+      }
+    }
+    
+  } catch (err) {
+    console.error('❌ Ошибка обновления структуры:', err);
   }
 }
 
@@ -904,3 +871,4 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
+
