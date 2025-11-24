@@ -247,6 +247,76 @@ async function updateTableStructure() {
   }
 }
 
+// 🔧 ЗАБРАТЬ НАГРАДУ ЗА ПОДПИСКУ
+app.post('/api/user/:userId/claim-subscribe', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Получаем данные пользователя
+    const userDataResult = await pool.query(
+      'SELECT * FROM user_data WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (userDataResult.rows.length === 0) {
+      return res.json({ success: false, error: 'User data not found' });
+    }
+    
+    const userData = userDataResult.rows[0];
+    const now = new Date();
+    const lastClaim = userData.subscribe_last_claim;
+    const cooldown = 60 * 1000; // 1 минута
+    
+    // Проверяем кулдаун
+    if (lastClaim && (now - new Date(lastClaim)) < cooldown) {
+      const remaining = cooldown - (now - new Date(lastClaim));
+      return res.json({ 
+        success: false, 
+        error: 'Cooldown', 
+        remaining: Math.ceil(remaining / 1000) 
+      });
+    }
+    
+    // Проверяем подписку
+    if (!userData.is_subscribed) {
+      return res.json({ success: false, error: 'Not subscribed' });
+    }
+    
+    // Начисляем награду
+    const reward = 100;
+    const newBalance = (userData.balance || 0) + reward;
+    const newCount = (userData.subscribe_count || 0) + 1;
+    
+    // Обновляем баланс и счетчик
+    await pool.query(
+      `UPDATE user_data 
+       SET balance = $1, subscribe_count = $2, subscribe_last_claim = $3, updated_at = NOW()
+       WHERE user_id = $4`,
+      [newBalance, newCount, now, userId]
+    );
+    
+    // Обновляем баланс в основной таблице
+    await pool.query(
+      'UPDATE users SET balance = $1 WHERE user_id = $2',
+      [newBalance, userId]
+    );
+    
+    // Записываем транзакцию
+    await pool.query(
+      `INSERT INTO transactions (user_id, amount, type, description) 
+       VALUES ($1, $2, $3, $4)`,
+      [userId, reward, 'subscribe', 'Награда за подписку на канал']
+    );
+    
+    console.log(`✅ Награда за подписку начислена: ${userId} -> +${reward} монет`);
+    res.json({ success: true, reward: reward, newBalance: newBalance });
+    
+  } catch (err) {
+    console.error('❌ Ошибка начисления награды за подписку:', err);
+    res.json({ success: false, error: 'Server error' });
+  }
+});
+
 // 🔧 ФУНКЦИЯ ДЛЯ ГЕНЕРАЦИИ РЕФЕРАЛЬНОГО КОДА
 function generateReferralCode() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -989,6 +1059,7 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
+
 
 
 
