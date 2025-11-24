@@ -293,6 +293,27 @@ async function getOrCreateUser(userData) {
   }
 }
 
+// 🔧 ПОЛУЧИТЬ ПОЛЬЗОВАТЕЛЯ
+app.get('/api/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    const result = await pool.query(
+      'SELECT * FROM users WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error getting user:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // 🔧 ОБНОВИТЬ СТАТУС ПОДПИСКИ ПОЛЬЗОВАТЕЛЯ
 async function updateUserSubscriptionStatus(userId, isSubscribed) {
   try {
@@ -968,6 +989,7 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
+
 
 
 
