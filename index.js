@@ -221,8 +221,13 @@ async function updateTableStructure() {
       { name: 'has_ref_in_bio', type: 'BOOLEAN DEFAULT FALSE' },
       { name: 'ref_in_bio_count', type: 'INTEGER DEFAULT 0' },
       { name: 'ref_in_bio_last_claim', type: 'TIMESTAMP' },
-      { name: 'referral_last_claim', type: 'TIMESTAMP' },
-      { name: 'referrals', type: 'INTEGER DEFAULT 0' }
+      { name: 'referral_last_claim', type: 'TIMESTAMP' }, // ДОБАВЛЕНО
+      { name: 'referrals', type: 'INTEGER DEFAULT 0' },
+      { name: 'daily_bonus_count', type: 'INTEGER DEFAULT 0' }, // ДОБАВЛЕНО
+      { name: 'daily_bonus_last_claim', type: 'TIMESTAMP' }, // ДОБАВЛЕНО
+      { name: 'daily_bonus_current_reward', type: 'INTEGER DEFAULT 10' }, // ДОБАВЛЕНО
+      { name: 'cases_opened', type: 'INTEGER DEFAULT 0' }, // ДОБАВЛЕНО
+      { name: 'level', type: 'INTEGER DEFAULT 1' } // ДОБАВЛЕНО
     ];
     
     for (const column of columnsToAdd) {
@@ -899,3 +904,4 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
+
