@@ -247,6 +247,137 @@ async function updateTableStructure() {
   }
 }
 
+// 🔧 ПОЛУЧИТЬ КЕЙСЫ
+app.get('/api/cases', async (req, res) => {
+  try {
+    // Тестовые данные кейсов
+    const casesData = [
+      {
+        id: 1,
+        name: "Кейс Grunt",
+        price: 100,
+        image: "https://cs-shot.pro/images/new2/Grunt.png",
+        total_opened: 1542,
+        items: [
+          { name: "AK-47 | Redline", price: "1500", image: "https://community.akamai.steamstatic.com/economy/image/i0CoZ81Ui0m-9KwlBY1L_18myuGuq1wfhWSaZgMttyVfPaERSR0Wqmu7LAocGIGz3UqlXOLrxM-vMGmW8VNxu5Dx60noTyLwlcK3wiFO0POlPPNSIf6GDG6D_uJ_t-l9AX_nzBhw4TvWwo6udC2QbgZyWcN2RuMP4xHrlYDnYezm7geP3d5FyH3gznQeY_Oe4QY" },
+          { name: "AWP | Dragon Lore", price: "10000", image: "https://community.akamai.steamstatic.com/economy/image/i0CoZ81Ui0m-9KwlBY1L_18myuGuq1wfhWSaZgMttyVfPaERSR0Wqmu7LAocGIGz3UqlXOLrxM-vMGmW8VNxu5Dx60noTyL8ypexwiFO0P_6afBSJeaaAliUwOd7qe5WQyC0nQlp4GqGz42ucCqXaQMhDpd4R-AIsxK6ktXgZePltVPXitoRn3-tjCgd6zErvbijVJZd2Q" }
+        ]
+      },
+      {
+        id: 2,
+        name: "Кейс Lurk",
+        price: 200,
+        image: "https://cs-shot.pro/images/new2/Lurk.png",
+        total_opened: 892,
+        items: [
+          { name: "M4A4 | Howl", price: "8000", image: "https://community.akamai.steamstatic.com/economy/image/i0CoZ81Ui0m-9KwlBY1L_18myuGuq1wfhWSaZgMttyVfPaERSR0Wqmu7LAocGIGz3UqlXOLrxM-vMGmW8VNxu5Dx60noTyLkjYbf7itX6vytbbZSKOmsHGKU1edxtfNWQyC0nQlp4GqGz42ucCqXaQMhDpd4R-AIsxK6ktXgZePltVPXitoRn3-tjCgd6zErvbijVJZd2Q" },
+          { name: "Knife | Fade", price: "12000", image: "https://community.akamai.steamstatic.com/economy/image/i0CoZ81Ui0m-9KwlBY1L_18myuGuq1wfhWSaZgMttyVfPaERSR0Wqmu7LAocGIGz3UqlXOLrxM-vMGmW8VNxu5Dx60noTyLwi5Hf_jdk4OSrerRsM-OsCXWRx9F3peZWRyyygwRp527cn478dXyXbAJ2DZV2QucK5BDukoexMO3m4QWN2o1Hyiz-ii4bvTErvbhWWiFhog" }
+        ]
+      }
+    ];
+    
+    res.json(casesData);
+  } catch (err) {
+    console.error('Error getting cases:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ПОЛУЧИТЬ РОЗЫГРЫШИ
+app.get('/api/raffles', async (req, res) => {
+  try {
+    // Тестовые данные розыгрышей
+    const rafflesData = [
+      { 
+        id: 1, 
+        name: 'AK-47 | Годовая подписка', 
+        end_date: '2024-12-31T23:59:59', 
+        participants: 1245,
+        image: 'https://community.akamai.steamstatic.com/economy/image/i0CoZ81Ui0m-9KwlBY1L_18myuGuq1wfhWSaZgMttyVfPaERSR0Wqmu7LAocGIGz3UqlXOLrxM-vMGmW8VNxu5Dx60noTyLwlcK3wiFO0POlPPNSIf6GDG6D_uJ_t-l9AX_nzBhw4TvWwo6udC2QbgZyWcN2RuMP4xHrlYDnYezm7geP3d5FyH3gznQeY_Oe4QY'
+      },
+      { 
+        id: 2, 
+        name: 'AWP | Элитный кейс', 
+        end_date: '2024-12-25T23:59:59', 
+        participants: 893,
+        image: 'https://community.akamai.steamstatic.com/economy/image/i0CoZ81Ui0m-9KwlBY1L_18myuGuq1wfhWSaZgMttyVfPaERSR0Wqmu7LAocGIGz3UqlXOLrxM-vMGmW8VNxu5Dx60noTyL8ypexwiFO0P_6afBSJeaaAliUwOd7qe5WQyC0nQlp4GqGz42ucCqXaQMhDpd4R-AIsxK6ktXgZePltVPXitoRn3-tjCgd6zErvbijVJZd2Q'
+      }
+    ];
+    
+    res.json(rafflesData);
+  } catch (err) {
+    console.error('Error getting raffles:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 СОЗДАТЬ/ОБНОВИТЬ ПОЛЬЗОВАТЕЛЯ
+app.post('/api/user', async (req, res) => {
+  try {
+    const { user_id, username, first_name, last_name, photo_url, referral_code } = req.body;
+    
+    // Проверяем существует ли пользователь
+    const existingUser = await pool.query(
+      'SELECT * FROM users WHERE user_id = $1',
+      [user_id]
+    );
+    
+    if (existingUser.rows.length > 0) {
+      // Обновляем существующего пользователя
+      const result = await pool.query(
+        `UPDATE users SET 
+          username = $1, first_name = $2, last_name = $3, photo_url = $4, updated_at = NOW()
+         WHERE user_id = $5 
+         RETURNING *`,
+        [username, first_name, last_name, photo_url, user_id]
+      );
+      
+      res.json(result.rows[0]);
+    } else {
+      // Создаем нового пользователя
+      const referralCode = referral_code || generateReferralCode();
+      const result = await pool.query(
+        `INSERT INTO users (user_id, username, first_name, last_name, photo_url, referral_code) 
+         VALUES ($1, $2, $3, $4, $5, $6) 
+         RETURNING *`,
+        [user_id, username, first_name, last_name, photo_url, referralCode]
+      );
+      
+      // Создаем запись в user_data
+      await pool.query(
+        `INSERT INTO user_data (user_id) VALUES ($1)`,
+        [user_id]
+      );
+      
+      res.json(result.rows[0]);
+    }
+  } catch (err) {
+    console.error('Error creating/updating user:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ПОЛУЧИТЬ ПОЛЬЗОВАТЕЛЯ
+app.get('/api/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    const result = await pool.query(
+      'SELECT * FROM users WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error getting user:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // 🔧 ЗАБРАТЬ НАГРАДУ ЗА ПОДПИСКУ
 app.post('/api/user/:userId/claim-subscribe', async (req, res) => {
   try {
@@ -1059,6 +1190,7 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
+
 
 
 
