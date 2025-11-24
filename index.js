@@ -257,6 +257,8 @@ function generateReferralCode() {
   return result;
 }
 
+
+
 // 🔧 ПОЛУЧИТЬ ИЛИ СОЗДАТЬ ПОЛЬЗОВАТЕЛЯ
 async function getOrCreateUser(userData) {
   try {
@@ -333,6 +335,31 @@ app.get('/api/user/:userId/inventory', async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error('Error getting inventory:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 ОБНОВИТЬ БАЛАНС ПОЛЬЗОВАТЕЛЯ
+app.put('/api/user/:userId/balance', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { balance } = req.body;
+    
+    // Обновляем баланс в основной таблице users
+    await pool.query(
+      'UPDATE users SET balance = $1 WHERE user_id = $2',
+      [balance, userId]
+    );
+    
+    // Также обновляем в user_data
+    await pool.query(
+      'UPDATE user_data SET balance = $1 WHERE user_id = $2',
+      [balance, userId]
+    );
+    
+    res.json({ success: true, newBalance: balance });
+  } catch (err) {
+    console.error('Error updating balance:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -941,5 +968,6 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
+
 
 
