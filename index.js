@@ -320,6 +320,43 @@ async function updateUserSubscriptionStatus(userId, isSubscribed) {
   }
 }
 
+// 🔧 ПОЛУЧИТЬ ИНВЕНТАРЬ ПОЛЬЗОВАТЕЛЯ
+app.get('/api/user/:userId/inventory', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    const result = await pool.query(
+      'SELECT * FROM user_inventory WHERE user_id = $1 ORDER BY obtained_at DESC',
+      [userId]
+    );
+    
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error getting inventory:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 🔧 СОХРАНИТЬ ПРЕДМЕТ В ИНВЕНТАРЬ
+app.post('/api/user/:userId/inventory', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { item_name, item_price, item_image } = req.body;
+    
+    const result = await pool.query(
+      `INSERT INTO user_inventory (user_id, item_name, item_price, item_image) 
+       VALUES ($1, $2, $3, $4) 
+       RETURNING *`,
+      [userId, item_name, item_price, item_image]
+    );
+    
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error saving inventory item:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // 🔧 ОБНОВИТЬ СТАТУС БОТА В БИО
 async function updateUserBotInBioStatus(userId, hasBotInBio) {
   try {
@@ -904,4 +941,5 @@ app.listen(port, async () => {
     console.error('❌ Ошибка инициализации:', err);
   }
 });
+
 
